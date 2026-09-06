@@ -70,22 +70,42 @@ async def main():
   # Genuine pointer actions on the viewport-sized Gantt canvas, each undone.
   async def focus_gantt():
    await page.evaluate("()=>{meridian.selectActivity('A1040',true);meridian.gantt.scale=15;meridian.gantt.focus('A1040');meridian.gantt.invalidate();}")
-   await page.wait_for_timeout(100)
+   await settle()
   async def point(activity,edge=False):
-   h=await page.evaluate("id=>meridian.gantt.hits.find(h=>h.id===id)",activity)
-   b=await page.locator('.annotation-layer').bounding_box()
-   x=h['x']+h['w']-1 if edge else max(6,min(b['width']-6,h['x']+min(25,h['w']/2)))
-   return b['x']+x,b['y']+h['y']+h['h']/2
+   # Sample hit geometry and its DOM coordinate transform in the same frame.
+   # Scroll events and CSS resizing may invalidate previously sampled hit boxes.
+   answer=await page.evaluate("""({id,edge})=>{
+     const g=meridian.gantt;
+     g.setScroll(document.querySelector('#activity-scroll').scrollTop);
+     g.draw();
+     const h=g.hits.find(h=>h.id===id), b=g.overlay.getBoundingClientRect();
+     if(!h)throw new Error('Activity is outside the rendered viewport: '+id);
+     const x=edge?h.x+h.w-2:Math.max(8,Math.min(b.width-8,h.x+Math.min(25,h.w/2)));
+     const y=h.y+h.h/2;
+     const target=document.elementFromPoint(b.left+x,b.top+y);
+     if(target!==g.overlay)throw new Error('Gantt pointer target obscured: '+target?.outerHTML);
+     if(g.hitAt(x,y)?.id!==id)throw new Error('Hit test does not match requested activity '+id);
+     return [b.left+x,b.top+y];
+   }""",{'id':activity,'edge':edge})
+   return answer
+  async def drag(x,y,tx,ty,mode):
+   await page.mouse.move(x,y)
+   await page.mouse.down()
+   await page.wait_for_function('mode=>meridian.gantt.drag?.mode===mode',arg=mode)
+   await page.mouse.move(tx,ty,steps=12)
+   await page.wait_for_function('meridian.gantt.drag?.moved===true')
+   await page.mouse.up()
+   await settle()
   await focus_gantt();x,y=await point('A1040')
-  await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+45,y,steps=6);await page.mouse.up();await settle()
+  await drag(x,y,x+45,y,'move')
   await check('Gantt bar drag creates a real start constraint',"meridian.project.activities.find(a=>a.id==='A1040').constraint==='SNET'")
   await page.keyboard.press('Control+z');await settle()
   await focus_gantt();x,y=await point('A1040',True)
-  await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+45,y,steps=6);await page.mouse.up();await settle()
+  await drag(x,y,x+45,y,'resize')
   await check('Gantt right-edge drag edits scheduled duration',"meridian.project.activities.find(a=>a.id==='A1040').remaining>5280")
   await page.keyboard.press('Control+z');await settle()
   await focus_gantt();x,y=await point('A1040');tx,ty=await point('A2010')
-  await page.keyboard.down('Shift');await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(tx,ty,steps=6);await page.mouse.up();await page.keyboard.up('Shift');await settle()
+  await page.keyboard.down('Shift');await drag(x,y,tx,ty,'link');await page.keyboard.up('Shift');await settle()
   await check('Gantt Shift-drag creates an editable FS dependency',"meridian.project.relationships.some(e=>e.from==='A1040'&&e.to==='A2010'&&e.type==='FS')")
   await page.keyboard.press('Control+z');await settle()
   await page.click('.view-tab[data-view=resources]');await page.fill('input[data-resource="r-mep"][data-resource-field="capacity"]','3');await page.locator('input[data-resource="r-mep"][data-resource-field="capacity"]').press('Tab');await settle()
