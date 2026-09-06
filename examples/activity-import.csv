@@ -1,0 +1,6 @@
+Activity ID,Activity Name,Duration Days,WBS,Predecessors,Notes
+D1000,Design coordination,10,01,,Demonstration input; dates are calculated
+D1010,Authority review,5,01,D1000:FS:2d,Two displayed workdays of lag
+D1020,Early procurement,8,02,D1000:SS:3d,Start-to-start relationship
+D1030,Design gate,0,01,D1010:FS:0d,Zero-duration milestone
+D1040,Equipment release,4,02,D1020:FS:0d;D1030:FS:0d,Two resolved predecessors

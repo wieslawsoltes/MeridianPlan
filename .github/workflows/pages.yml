@@ -1,0 +1,112 @@
+name: Test and deploy Meridian Plan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run scheduling and worker tests
+        run: npm test | tee docs/node-test-results.tap
+      - name: Install browser test tooling
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Build static site
+        run: npm run build:pages
+      - name: Verify the project subpath in a real browser
+        shell: bash
+        run: |
+          mkdir -p _preview/MeridianPlan
+          cp -R _site/. _preview/MeridianPlan/
+          python -m http.server 4173 --bind 127.0.0.1 --directory _preview > /tmp/meridian-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/MeridianPlan/ > /dev/null; then break; fi
+            sleep 1
+          done
+          export MERIDIAN_URL=http://127.0.0.1:4173/MeridianPlan/
+          python tests/browser_smoke.py
+          python tests/capture_previews.py
+          cp docs/*-preview.png docs/browser-test-results.json _site/docs/
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meridian-test-evidence
+          path: |
+            docs/node-test-results.tap
+            docs/browser-test-results.json
+            docs/*-preview.png
+          if-no-files-found: warn
+      - name: Upload Pages site
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install live verification tooling
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Verify live HTTPS app and published commit
+        env:
+          MERIDIAN_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: python tests/pages_smoke.py
+      - name: Upload live verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meridian-live-verification
+          path: |
+            docs/live-verification.json
+            docs/live-preview.png
+          if-no-files-found: warn

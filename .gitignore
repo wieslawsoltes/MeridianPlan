@@ -2,3 +2,9 @@ node_modules/
 __pycache__/
 *.pyc
 .DS_Store
+dist/
+_site/
+_preview/
+docs/*-preview.png
+docs/*-results.*
+docs/live-verification.json
