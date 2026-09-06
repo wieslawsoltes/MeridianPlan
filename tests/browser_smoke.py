@@ -22,9 +22,16 @@ async def main():
    await page.evaluate("""()=>{meridian.repo={backend:'In-memory test store',save:async w=>{window.__saved=structuredClone(w)},load:async()=>structuredClone(window.__saved)};document.querySelector('#toasts').innerHTML='';meridian.renderExplorer();}""")
   async def settle():
    await page.evaluate('async()=>{await meridian.changeQueue;}')
-   await page.wait_for_timeout(60)
+   await page.wait_for_function('!meridian.busy')
+   await page.evaluate('()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
   async def check(name,expr):
-   assert await page.evaluate(expr),name
+   try:
+    await page.wait_for_function(expr,timeout=15000)
+   except Exception as error:
+    state=await page.evaluate("({url:location.href,backend:meridian.backend,busy:meridian.busy,rows:meridian.rows?.length,scrollTop:document.querySelector('#activity-scroll')?.scrollTop,clientHeight:document.querySelector('#activity-scroll')?.clientHeight,scrollHeight:document.querySelector('#activity-scroll')?.scrollHeight,visible:[...document.querySelectorAll('.activity-row')].map(e=>e.dataset.id)})")
+    print('FAILED',name,json.dumps(state),errors,flush=True)
+    await page.screenshot(path=str(ROOT/'docs/browser-failure-preview.png'),full_page=True)
+    raise AssertionError(name) from error
    RESULTS.append({'test':name,'passed':True});print('PASS',name)
   async def submit():
    await page.locator('#modal-form button[type=submit]').click();await settle()
@@ -108,7 +115,7 @@ async def main():
   await check('Resource assignment editor creates demand and actual hours',"meridian.project.assignments.some(a=>a.activityId===meridian.selectedId&&a.units===0.25&&a.actualHours===2)")
   await page.click('[data-action=detail-tab][data-tab=general]');await page.fill('#details-form [name=actualStart]','2026-08-03T08:00');await page.fill('#details-form [name=percent]','25');await page.fill('#details-form [name=remaining]','3');await page.click('#details-form button[type=submit]');await settle()
   await check('Progress update retains actual start while remaining work waits for logic',"meridian.selected.percent===25 && meridian.selected.actualStart===meridian.project.dataDate && meridian.selectedResult.remainingStart>meridian.project.dataDate")
-  await page.evaluate("meridian.importCSV('Activity ID,Activity Name,Duration Days,WBS,Predecessors\nU1000,Imported start,1,QA,\nU1010,Imported successor,2,QA,U1000:FS:1d\n')")
+  await page.evaluate("text=>meridian.importCSV(text)", "Activity ID,Activity Name,Duration Days,WBS,Predecessors\nU1000,Imported start,1,QA,\nU1010,Imported successor,2,QA,U1000:FS:1d\n")
   await submit()
   await check('CSV import creates activities, WBS and resolved dependencies',"meridian.project.activities.length===34 && meridian.project.wbs.some(w=>w.code==='QA') && meridian.project.relationships.some(e=>e.lag===480&&e.from===meridian.project.activities.find(a=>a.code==='U1000').id)")
   await check('Exported CSV and printable report contain computed data',"meridian.activityCSV().includes('Total Float Days') && meridian.activityCSV().includes('T1000') && meridian.reportHTML().includes('Browser-tested work package') && meridian.resourceCSV().includes('Demand Hours')")
